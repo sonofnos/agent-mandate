@@ -197,7 +197,7 @@ public class ProposalService(MandateDb db, ApprovalTokens tokens, KillSwitch kil
         var now = clock.GetUtcNow();
         var stale = await db.Proposals.AsNoTracking()
             .Where(p => p.Status == ProposalStatus.AwaitingApproval && p.ApprovalExpiresAt < now)
-            .Select(p => p.Id).Take(100).ToListAsync(ct);
+            .OrderBy(p => p.ApprovalExpiresAt).Select(p => p.Id).Take(100).ToListAsync(ct);
         var n = 0;
         foreach (var id in stale)
             if (await TransitionAsync(id, ProposalStatus.AwaitingApproval, ProposalStatus.Expired, "system", new { }, null, ct))

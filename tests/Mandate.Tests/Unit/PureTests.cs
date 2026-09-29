@@ -1,3 +1,4 @@
+using Mandate.Core.Agent;
 using Mandate.Core.Audit;
 using Mandate.Core.Domain;
 using Mandate.Core.Policy;
@@ -187,4 +188,28 @@ public class TransitionTests
     [InlineData(ProposalStatus.Failed, ProposalStatus.Approved, false)]
     public void Only_listed_transitions_are_allowed(ProposalStatus from, ProposalStatus to, bool allowed) =>
         Assert.Equal(allowed, ProposalTransitions.IsAllowed(from, to));
+}
+
+public class ClaimGuardTests
+{
+    private static ActionProposal P(ProposalStatus s) => new() { AmountMinor = 500_000, BeneficiaryName = "NGOZI OKAFOR", Status = s };
+
+    [Theory]
+    [InlineData("Status: Approved and sent.", true)]
+    [InlineData("₦5,000 has been sent to mum.", true)]
+    [InlineData("Not sent. Approve it in the app.", false)]
+    [InlineData("It will be sent once you approve.", false)]
+    [InlineData("Your transfer has not been sent yet.", false)]
+    [InlineData("Queued. Not confirmed as sent yet.", false)]
+    public void Detects_claims_that_money_moved(string reply, bool claims) => Assert.Equal(claims, ClaimGuard.ClaimsMoneyMoved(reply));
+
+    [Fact]
+    public void Appends_ledger_status_when_the_claim_is_ahead_of_the_ledger()
+    {
+        var c = ClaimGuard.Correction("Approved and sent.", [P(ProposalStatus.Approved)]);
+        Assert.Equal("Ledger status: ₦5,000.00 to NGOZI OKAFOR is approved and still processing, not confirmed yet.", c);
+    }
+
+    [Fact]
+    public void Leaves_a_true_claim_alone() => Assert.Null(ClaimGuard.Correction("Sent.", [P(ProposalStatus.Succeeded)]));
 }

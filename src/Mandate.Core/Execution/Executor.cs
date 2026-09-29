@@ -95,7 +95,7 @@ public class Executor(
         var leaseCutoff = now - options.ExecutionLease;
         var orphaned = await db.Proposals.AsNoTracking()
             .Where(p => p.Status == ProposalStatus.Executing && p.ExecutionStartedAt < leaseCutoff)
-            .Select(p => p.Id).Take(50).ToListAsync(ct);
+            .OrderBy(p => p.ExecutionStartedAt).Select(p => p.Id).Take(50).ToListAsync(ct);
         foreach (var id in orphaned)
             await proposals.TransitionAsync(id, ProposalStatus.Executing, ProposalStatus.Unknown, "reconciler",
                 new { reason = "execution lease expired" }, null, ct);

@@ -72,6 +72,9 @@ public class AgentRun
     public long? OutputTokens { get; set; }
     public int LatencyMs { get; set; }
     public string? Error { get; set; }
+
+    /// <summary>The reply claimed money moved before the ledger said so, and the server appended the real status.</summary>
+    public bool ClaimCorrected { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

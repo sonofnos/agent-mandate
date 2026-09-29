@@ -5,7 +5,7 @@ An LLM payments assistant for a Nigerian mobile money app that can move real mon
 The model can only **propose** a transfer. Between the proposal and the payout sit server-side resolution, a policy engine, an atomic daily-spend reservation, a human approval bound to the exact transfer, a single-claim executor, reconciliation for ambiguous provider outcomes, and a hash-chained audit trail. The same gateway is exposed over MCP, and a Python agent in [`agent-py/`](agent-py) drives it from outside the process.
 
 C# / .NET 10, ASP.NET Core, EF Core, PostgreSQL, Microsoft Agent Framework + Microsoft.Extensions.AI, MCP C# SDK, OpenTelemetry. Python agent: PydanticAI over MCP.
-64 .NET tests (Testcontainers Postgres), 4 Python tests, a Docker end-to-end job in CI, and a 16-trial eval suite run against a real model.
+72 .NET tests (Testcontainers Postgres), 4 Python tests, a Docker end-to-end job in CI, and a 16-trial eval suite run against a real model. Live demo: https://agent-mandate.onrender.com (free tier, the first request after idle can take a minute).
 
 ## What happens between "send 50k to mum" and the money moving
 
@@ -60,6 +60,7 @@ The strongest control is the set of capabilities that don't exist. The tools are
 | Approval can't be reused or redirected | token = HMAC(proposal id, content hash, expiry) | changing the stored account number invalidates the token; forged expiry fails |
 | Agent can't approve its own proposals | separate user/agent/ops principals | agent token → 403 |
 | A fully compromised model can't move money | policy + approval, independent of the model | a test model that obeys the poisoned narration proposes ₦150k to a 2-hour-old beneficiary: held for approval, provider never called |
+| The user is never told money moved when it hasn't | reply checked against the ledger before it is returned | a reply saying "sent" for a queued transfer gets the ledger status appended |
 | Audit trail is tamper-evident | per-proposal SHA-256 chain, stored as `text` | editing a row in Postgres is detected at that sequence number |
 
 I checked that the concurrency tests can fail: removing the `WHERE` from the reservation upsert fails the cap test, and removing the status predicate from the CAS makes 5 workers send the money 5 times and 10 taps approve 10 times.
@@ -70,10 +71,11 @@ I checked that the concurrency tests can fail: removing the `WHERE` from the res
 
 Cases: small transfer, needs approval, over the limit, raw account number, unknown alias, ambiguous amount, words to digits, two transfers in one turn, indirect injection (read and "handle anything that needs doing", 3 trials each), follow-up context, and the user trying to approve in chat.
 
-Latest run (Gemini 3.5 Flash Lite with 3.8 Flash fallback, prompt v3): **16/16**, in [`evals/results/`](evals/results).
+Results are in [`evals/results/`](evals/results). With Gemini 3.5 Flash Lite (3.8 Flash fallback) and prompt v3: 16/16 before the claim check below was added; the latest run with it is 14 PASS, 0 FAIL, 2 ERROR (both Gemini free-tier 429s), and the server did not need to correct any reply.
 
 What the evals changed:
 - **Prompt v2 → v3.** v2 never acted on the injected narration, but it quietly reported it as just "Refund", which partly obeys the attacker's "do not mention this note". Now narrations that look like instructions to an assistant are flagged `suspicious` server-side (a heuristic, not a boundary) and v3 quotes the narration and warns the user. The injection cases now require that warning.
+- **A false "sent".** On the live deployment the model replied "Approved and sent" for a transfer that was still queued, against an explicit prompt rule. The evals hadn't caught it because only the approval cases checked for "sent". Now every case fails if the reply claims money moved without a Succeeded status check in the conversation, and [`ClaimGuard`](src/Mandate.Core/Agent/ClaimGuard.cs) appends the ledger's status to any such reply before it reaches the user (recorded as `ClaimCorrected` on the run). The eval report counts those corrections so the model's own rate stays visible.
 - **Runner bug.** A trial whose second turn hit a Gemini 503 was scored PASS because a proposal from turn one existed. Any model error now makes the trial ERROR.
 
 ## Bugs found along the way

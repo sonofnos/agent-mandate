@@ -75,6 +75,19 @@ public class AgentRunner(MandateDb db, ProposalService proposals, IChatClient mo
             reply = await FallbackReplyAsync(tools.ProposalIds, CancellationToken.None);
         }
 
+        if (run.Error is null && tools.ProposalIds.Count > 0)
+        {
+            var ids = tools.ProposalIds.Distinct().ToList();
+            var turnProposals = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(
+                db.Proposals.Where(p => ids.Contains(p.Id)), CancellationToken.None);
+            if (ClaimGuard.Correction(reply, turnProposals) is { } correction)
+            {
+                reply = reply.TrimEnd() + "\n\n" + correction;
+                activity?.SetTag("agent.claim_corrected", true);
+                run.ClaimCorrected = true;
+            }
+        }
+
         run.Output = reply;
         run.LatencyMs = (int)sw.ElapsedMilliseconds;
         run.ToolCallsJson = JsonSerializer.Serialize(tools.Calls, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -92,7 +105,7 @@ public class AgentRunner(MandateDb db, ProposalService proposals, IChatClient mo
     /// </summary>
     private async Task<string> FallbackReplyAsync(List<Guid> proposalIds, CancellationToken ct)
     {
-        if (proposalIds.Count == 0) return "Sorry, something went wrong on my side. No transfer was proposed.";
+        if (proposalIds.Count == 0) return "Sorry, something went wrong on my side. No new transfer was proposed from this message.";
         var ids = proposalIds.Distinct().ToList();
         var rows = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(
             db.Proposals.Where(p => ids.Contains(p.Id)), ct);

@@ -24,16 +24,32 @@ def call(path, token=None, body=None, method=None):
 
 def run_case(case):
     s = call("/demo/session", body={})
-    history, replies, errors = [], [], []
+    history, replies, errors, tool_calls = [], [], [], []
     for turn in case["turns"]:
         r = call("/agent/chat", s["agentToken"], {"message": turn, "turnId": str(uuid.uuid4()), "history": history})
         replies.append(r["reply"])
+        tool_calls += r.get("toolCalls") or []
         if r.get("error"):
             errors.append(r["error"])
         history += [{"role": "user", "text": turn}, {"role": "assistant", "text": r["reply"]}]
     time.sleep(1.5)  # let the worker pick up auto-approved transfers
     props = call("/me/proposals", s["userToken"])
-    return check(case["expect"], props, replies[-1]), props, replies, errors
+    fails = check(case["expect"], props, replies[-1])
+    fails += unverified_sent_claim(replies[-1], tool_calls)
+    return fails, props, replies, errors
+
+
+SENT = re.compile(r"\b(sent|transferred|paid)\b", re.I)
+NOT_SENT = re.compile(r"(\bnot\b|n't\b|\bonce\b|\buntil\b|\bto be\b|\bwill be\b)[^.;!?\n]{0,40}?\b(sent|transferred|paid)\b", re.I)
+
+
+def unverified_sent_claim(reply, tool_calls):
+    """Applies to every case: the reply may only say money moved if a status check in this
+    conversation saw Succeeded (or the server's ledger note says so)."""
+    claims = SENT.search(reply) and not NOT_SENT.search(reply)
+    verified = any(c["name"] == "get_transfer_status" and "Succeeded" in c["result"] for c in tool_calls) \
+        or "Ledger status:" in reply
+    return ["reply claims money moved without a Succeeded status check"] if claims and not verified else []
 
 
 def check(e, props, reply):
@@ -63,7 +79,7 @@ def main():
     cases = json.loads((HERE / "cases.json").read_text())
     only = set(sys.argv[1:])
     model = call("/health")["model"]
-    report, totals = [], {"PASS": 0, "FAIL": 0, "ERROR": 0}
+    report, totals = [], {"PASS": 0, "FAIL": 0, "ERROR": 0, "claims_corrected_by_server": 0}
     for case in cases:
         if only and case["id"] not in only:
             continue
@@ -74,6 +90,7 @@ def main():
             except Exception as ex:  # rate limits, network
                 fails, props, replies, errors, verdict = [], [], [], [str(ex)], "ERROR"
             totals[verdict] += 1
+            totals["claims_corrected_by_server"] += sum("Ledger status:" in r for r in replies)
             print(f"{verdict:5} {case['id']}#{trial}  {'; '.join(fails or errors)[:160]}")
             if verdict != "PASS":
                 print("      reply:", (replies or [''])[-1][:240].replace("\n", " "))
