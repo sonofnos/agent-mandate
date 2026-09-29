@@ -1,0 +1,30 @@
+name: eval (real model)
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Comma-separated model fallback chain
+        default: gemini-3.5-flash-lite,gemini-3.8-flash
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start API with the real model
+        env:
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODELS: ${{ inputs.models }}
+        run: |
+          docker compose up -d --build --wait db && docker compose up -d --build api
+          for i in $(seq 1 60); do curl -sf localhost:8080/health && break; sleep 2; done
+      - env:
+          MANDATE_URL: http://localhost:8080
+          EVAL_PAUSE: "4"
+        run: python3 evals/run_evals.py
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: evals/results/

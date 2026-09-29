@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Mandate.Api/Mandate.Api.csproj" />
+    <Project Path="src/Mandate.Core/Mandate.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Mandate.Tests/Mandate.Tests.csproj" />
+  </Folder>
+</Solution>

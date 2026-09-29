@@ -1,0 +1,8 @@
+bin/
+obj/
+.venv/
+__pycache__/
+.pytest_cache/
+*.user
+.env
+.DS_Store

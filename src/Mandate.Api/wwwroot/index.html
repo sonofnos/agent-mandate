@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-mandate</title>
+<style>
+  :root { --bg:#fafaf8; --fg:#1b1b1b; --muted:#6b6b6b; --line:#dcdcd6; --panel:#fff; --ok:#1f7a45; --warn:#9a5b00; --bad:#b3261e; --accent:#1d4ed8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121212; --fg:#e7e7e3; --muted:#9a9a95; --line:#2e2e2c; --panel:#1a1a19; --ok:#5fc18a; --warn:#e0a24a; --bad:#f08079; --accent:#8fb0ff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding:16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 0 4px; }
+  header p { margin:0; color:var(--muted); max-width:900px; }
+  main { display:grid; grid-template-columns: 1fr 1fr; gap:0; min-height: calc(100vh - 90px); }
+  section { padding:16px; min-width:0; }
+  section + section { border-left:1px solid var(--line); }
+  h2 { font-size:13px; margin:0 0 10px; color:var(--muted); font-weight:600; }
+  #log { display:flex; flex-direction:column; gap:10px; margin-bottom:12px; }
+  .msg { padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; max-width:85%; }
+  .msg.bot { max-width:95%; }
+  .tools { font:12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--muted); margin-top:6px; }
+  form { display:flex; gap:8px; }
+  input[type=text] { flex:1; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--fg); font:inherit; }
+  button { padding:6px 12px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--fg); font:inherit; cursor:pointer; }
+  button.primary { border-color:var(--accent); color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  .examples { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 16px; }
+  .examples button { font-size:12px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .s-Succeeded { color:var(--ok); } .s-AwaitingApproval, .s-Unknown, .s-Executing { color:var(--warn); } .s-Denied, .s-Failed, .s-Rejected, .s-Expired { color:var(--bad); }
+  .reasons { color:var(--muted); font-size:12px; }
+  pre { font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; overflow:auto; max-height:320px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:12px 0; color:var(--muted); font-size:12px; }
+  select { font:inherit; background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px; }
+  @media (max-width: 800px) { main { grid-template-columns:1fr; } section + section { border-left:0; border-top:1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>agent-mandate</h1>
+  <p>An LLM payments assistant that can only <em>propose</em> transfers. Policy, a per-day spend reservation, human approval, single-claim execution and reconciliation sit between the model and the money. The provider is simulated. Left: the chat the agent sees. Right: the user's approval channel, which the agent cannot reach.</p>
+</header>
+<main>
+  <section>
+    <h2>Chat (agent credential)</h2>
+    <div class="examples" id="examples"></div>
+    <div id="log"></div>
+    <form id="f"><input type="text" id="m" placeholder="send 5000 to mum for groceries" autocomplete="off"><button class="primary" id="send">Send</button></form>
+    <div class="row">Model: <span id="model">…</span></div>
+  </section>
+  <section>
+    <h2>Approvals and history (user credential)</h2>
+    <table><thead><tr><th>Amount / to</th><th>Status</th><th></th></tr></thead><tbody id="props"></tbody></table>
+    <div class="row">
+      Make the next provider call
+      <select id="fault"><option value="TimeoutAfterApply">time out after moving money</option><option value="TimeoutBeforeApply">time out before receiving it</option><option value="Decline">decline (insufficient funds)</option></select>
+      <button id="inject">Queue fault</button>
+    </div>
+    <h2>Audit trail</h2>
+    <pre id="audit">Select a proposal to see its hash-chained audit trail.</pre>
+  </section>
+</main>
+<script>
+const examples = ["send 5000 to mum for groceries", "send 50000 to landlord for rent", "send 3000 to tunde", "send 2000000 to mum", "send 5000 to 0123456789", "what was my last transaction?", "what are my limits?"];
+let S = null, history = [];
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function api(path, token, body, method) {
+  const r = await fetch(path, { method: method || (body ? "POST" : "GET"), headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const text = await r.text();
+  if (!r.ok) throw new Error(r.status + " " + text);
+  return text ? JSON.parse(text) : null;
+}
+
+async function session() {
+  try { S = JSON.parse(sessionStorage.getItem("am-session")); } catch { S = null; }
+  if (!S) { S = await api("/demo/session", null, {}); try { sessionStorage.setItem("am-session", JSON.stringify(S)); } catch {} }
+  const h = await api("/health"); $("model").textContent = h.model;
+}
+
+function add(role, text, tools) {
+  const d = document.createElement("div"); d.className = "msg " + role; d.textContent = text;
+  if (tools?.length) { const t = document.createElement("div"); t.className = "tools"; t.textContent = tools.map(c => `→ ${c.name}(${c.args ? JSON.stringify(c.args) : ""})`).join("\n"); d.appendChild(t); }
+  $("log").appendChild(d); d.scrollIntoView({ block: "nearest" });
+}
+
+async function send(text) {
+  if (!text.trim()) return;
+  add("user", text); $("m").value = ""; $("send").disabled = true;
+  const turnId = crypto.randomUUID();
+  try {
+    const r = await api("/agent/chat", S.agentToken, { message: text, turnId, history });
+    add("bot", r.reply || "(no reply)", r.toolCalls);
+    history.push({ role: "user", text }, { role: "assistant", text: r.reply || "" }); history = history.slice(-10);
+  } catch (e) { add("bot", "Error: " + e.message); }
+  $("send").disabled = false; refresh();
+}
+
+async function refresh() {
+  if (!S) return;
+  const list = await api("/me/proposals", S.userToken);
+  $("props").innerHTML = list.map(p => `<tr>
+    <td>${esc(p.amount)} → ${esc(p.to)}<div class="reasons">${esc(p.narration)} · ${esc(p.bank)} ${esc(p.account)}${p.providerReference ? " · ref " + esc(p.providerReference) : ""}</div><div class="reasons">${p.reasons.map(esc).join("<br>")}</div></td>
+    <td class="s-${p.status}">${p.status}${p.attempts > 1 ? ` (attempt ${p.attempts})` : ""}</td>
+    <td>${p.status === "AwaitingApproval" ? `<button class="primary" data-a="${p.id}" data-t="${esc(p.approvalToken)}">Approve</button> <button data-r="${p.id}">Reject</button> ` : ""}<button data-audit="${p.id}">Audit</button></td></tr>`).join("") || `<tr><td colspan="3" class="reasons">No proposals yet.</td></tr>`;
+}
+
+document.addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b) return;
+  try {
+    if (b.dataset.a) await api(`/me/proposals/${b.dataset.a}/approve`, S.userToken, { token: b.dataset.t });
+    else if (b.dataset.r) await api(`/me/proposals/${b.dataset.r}/reject`, S.userToken, {});
+    else if (b.dataset.audit) { const a = await api(`/me/proposals/${b.dataset.audit}/audit`, S.userToken); $("audit").textContent = `chain intact: ${a.chainIntact}\n\n` + a.events.map(ev => `#${ev.seq} ${ev.type.padEnd(17)} ${ev.actor.padEnd(22)} ${ev.hash}\n    ${JSON.stringify(ev.data)}`).join("\n"); return; }
+    else if (b.id === "inject") { await api("/demo/next-provider-fault", S.userToken, { fault: $("fault").value }); b.textContent = "Queued"; setTimeout(() => b.textContent = "Queue fault", 1500); return; }
+    else if (b.dataset.ex) { send(b.dataset.ex); return; }
+    else return;
+    refresh();
+  } catch (err) { alert(err.message); }
+});
+
+$("examples").innerHTML = examples.map(x => `<button data-ex="${esc(x)}">${esc(x)}</button>`).join("");
+$("f").addEventListener("submit", e => { e.preventDefault(); send($("m").value); });
+session().then(refresh).catch(e => add("bot", "Could not start a demo session: " + e.message));
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

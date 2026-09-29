@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mandate
+      POSTGRES_PASSWORD: mandate
+      POSTGRES_DB: mandate
+    ports: ["5436:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mandate"]
+      interval: 2s
+      retries: 20
+  api:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      ConnectionStrings__Mandate: Host=db;Database=mandate;Username=mandate;Password=mandate
+      Mandate__SigningKey: local-compose-signing-key-0123456789abcdef
+      Provider__LatencyMs: "800"
+      Executor__NotFoundSettleSeconds: "10"
+      LLM__BaseUrl: ${LLM_BASE_URL:-}
+      LLM__ApiKey: ${LLM_API_KEY:-}
+      LLM__Models: ${LLM_MODELS:-}
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]

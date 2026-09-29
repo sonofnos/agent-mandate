@@ -1,0 +1,5 @@
+**/bin/
+**/obj/
+agent-py/.venv/
+.git/
+evals/results/
